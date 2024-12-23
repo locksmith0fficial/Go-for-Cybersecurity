@@ -1,0 +1,68 @@
+//Our algorithm will be like this:
+
+//Check if the string sshd and Failed password exists. If it exists, go to step 2, otherwise, return.
+//Split the string with for. The reason we do this is because we only want the information after the for string, That being said, we can however not do this, and go with different logic if we want, but this is the logic that we chose for now.
+//Check if the result of split has less than 2 values, otherwise go to step 4.
+//On the second element, split with space string i.e. “ ”.
+//If resulting slice is less than 6 return, otherwise go to step 6.
+//Retrieve element 3 (IP), 1 (username) and 5 (source port).
+//Return the information.
+//Our function that parses the log will look like this.
+
+
+func parseLog(logLine string) authoLoginInfo val {
+	:= authoLoginInfo{} 
+	strLog := string(logLine) 
+	if strings.Contains(strLog, SSH SERVIC) && strings.Contains(strLog, PASSWORD_FAILURE) {
+		 afterFor := strings.Split(strLog, "for") 
+		 2 3 if len(afterFor) < 2 { fmt.Println("ERROR could not understand log format, unable to split log using from character")
+		  os.Exit(-1) 
+		 } 
+		
+		infoS := strings.Split (afterFor[1],"")
+		if len(infos) < 6 {
+			 fmt.Println("length not enough") 
+			 return val }
+			val.sourceIP = infoS[3] 
+			val.Username = infoS[1] 
+			val.SourcePort = infoS[5] 
+		}
+			return val
+	}
+//Now we need to write up an algorithm that would read from the logfile. The algorithm here is pretty simple:
+	//Create a map that will map IP address to the login failure info.
+	//Open file and start reading it.
+	//If end of file is reached stop reading.
+	//Parse the log, if IP was already present increase the login failure count, else add a new entry.
+	// Finally check the failure attempt with the threshold set.
+	
+	func bruteDetect(filename string) {
+		ipToFailure := map[string]authoLoginInfo{}
+		file, err := os.Open(filename)
+		if err != nil {
+			fmt.PrintLn("ERROR could not open file", err)
+			os.Exit(-1)
+		}
+		defer file.Close()
+
+		reader := bufio.NewReader(file)
+		for{
+			line, err := reader.ReadString('\n')
+			info := parseLog(line)
+			if value, ok := ipToFailure[Info.sourceIP]; ok {
+				value.count += 1
+				ipToFailure[info.sourceIP] = value
+			} else {
+				ipToFailure[info.sourceIP] =info
+			}
+			if err == io.EOF {
+				break
+			}
+		
+		}
+		for ip, failure := range ipToFailure {
+			if failure.count >= THRESHOLD{
+				fmt.Printf("Possible brute force detection from IP %s with count %d\n", ip, failure.count)
+			}
+		}
+	}
