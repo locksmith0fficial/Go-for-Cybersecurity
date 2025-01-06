@@ -1,0 +1,138 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"time"
+
+	"net"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/pcap"
+)
+
+const (
+	VIRUSTOTAL_FEED = "https://www.virustotal.com/api/v3/ip_addresses/"
+	API_KEY         = ""
+)
+
+type LastAnalysisResults struct {
+	Category   string `json:"category"`
+	Result     string `json:"result"`
+	Method     string `json:"method"`
+	EngineName string `json:"engine_name"`
+}
+
+type FeedResponse struct {
+	Data struct {
+		Attributes struct {
+			TotalVotes struct {
+				Harmless  int `json:"harmless"`
+				Malicious int `json:"malicious"`
+			} `json:"total_votes"`
+		} `json:"attributes"`
+	} `json:"data"`
+}
+
+var checkedIps = map[string]struct{}{} // checkedIps will hold the IP address that we have already queried in virustotal
+
+// ReadPacket takes path to pcap as an arguement, reads the file and alerts if any IPs was found to be malicious
+func ReadPacket(filename string) {
+
+	// opening the pcap file
+	handle, err := pcap.OpenOffline(filename)
+	if err != nil {
+		log.Fatalf("Unable to read from pcap file %v", err)
+	}
+	defer handle.Close()
+
+	packets := gopacket.NewPacketSource(handle, handle.LinkType())
+	for packet := range packets.Packets() {
+
+		// retreive IP layer information
+		network := packet.NetworkLayer()
+		if network == nil {
+			continue
+		}
+		netFlow := network.NetworkFlow()
+		source, destination := netFlow.Endpoints()
+		srcIP := net.ParseIP(source.String())
+		dstIP := net.ParseIP(destination.String())
+		ips := []string{}
+
+		// if IPs are not private then append to the ips slice
+		if !srcIP.IsPrivate() {
+			ips = append(ips, srcIP.String())
+		}
+
+		if !dstIP.IsPrivate() {
+			ips = append(ips, dstIP.String())
+		}
+
+		lookup(ips)
+	}
+}
+
+// lookup loops through the slice of ips, checks if those ip address are malicious or not
+func lookup(ips []string) {
+	for _, ip := range ips {
+		maxRetries := 4
+		for {
+			maxRetries -= 1
+			if _, ok := checkedIps[ip]; ok || maxRetries == 0 {
+				break
+			}
+			url := VIRUSTOTAL_FEED + ip // url to query
+			result := FeedResponse{}    // will hold the response from threat feed
+
+			req, err := http.NewRequest(http.MethodGet, url, nil)
+			req.Header.Set("x-apikey", API_KEY)
+			if err != nil {
+				fmt.Println("while crafting request for threat feed", err)
+				break
+			}
+
+			client := http.Client{Timeout: 10 * time.Second} // setting a timeout
+
+			resp, err := client.Do(req)
+			if err != nil {
+				fmt.Println(err, "while querying threat feed")
+				resp.Body.Close()
+				break
+			}
+
+			// virustotal will respond with status code 204, if rate limit has been crossed
+			// Reference https://www.tines.com/blog/virustotal-api-security-automation#:~:text=Avoiding%20VirusTotal%20API%20rate%20limits,an%20HTTP%20status%20of%20204.
+			if resp.StatusCode == 204 {
+				fmt.Println("Virustotal API limit reached, trying again")
+				time.Sleep(1 * time.Minute)
+				resp.Body.Close()
+				continue
+			}
+
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				fmt.Println("while unmarshalling json response", err)
+				resp.Body.Close()
+			}
+
+			if result.Data.Attributes.TotalVotes.Malicious > 0 {
+				fmt.Println("[*] WARN found malicious IP address", ip, " hit count", result.Data.Attributes.TotalVotes.Malicious)
+			}
+			checkedIps[ip] = struct{}{}
+			resp.Body.Close()
+			break
+		}
+	}
+
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		log.Fatal("Not enough arguements. Please provide pcap file as arguement. Ex: ./sus_data sample.pcap")
+	}
+	fmt.Println("[+] Reading packets now")
+	ReadPacket(os.Args[1])
+}
